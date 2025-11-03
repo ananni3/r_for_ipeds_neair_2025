@@ -1,0 +1,654 @@
+---
+title: "IPEDS Fall Enrollment Validation Report"
+author: "Your Name / IR Office"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(message = FALSE)
+knitr::opts_chunk$set(warning = FALSE)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(readxl)
+library(knitr)
+library(kableExtra)
+library(janitor)
+library(DT)
+
+## Load cleaned datasets that match IPEDSuploadables format
+student_data <- read_excel("Data/Cleaned_Sample_dataset.xlsx", sheet = "student_data")
+retention_data <- read_excel("Data/Cleaned_Sample_dataset.xlsx", sheet = "retention_data")
+
+## Load previous year data for comparison 
+prev_student_data <- read_excel("Data/Cleaned_Sample_dataset_previous_year.xlsx", sheet = "student_data")
+prev_retention_data <- read_excel("Data/Cleaned_Sample_dataset_previous_year.xlsx", sheet = "retention_data")
+
+```
+
+```{r}
+#This creates a function to recode variables from numeric to their categorical values
+recode_ipeds_vars <- function(df) {
+  df %>%
+    mutate(
+      Entry_status = case_when(IsFirstTime==1 ~ "1. First-time",
+                               IsTransfer==1 ~ "2. Transfer-in",
+                               TRUE ~ "3. Continuing"),
+      RaceEthnicity = case_when(
+        RaceEthnicity == 1 ~ "1. Nonresident alien",
+        RaceEthnicity == 2 ~ "2. Hispanic/Latino",
+        RaceEthnicity == 3 ~ "3. American Indian or Alaska Native",
+        RaceEthnicity == 4 ~ "4. Asian",
+        RaceEthnicity == 5 ~ "5. Black or African American",
+        RaceEthnicity == 6 ~ "6. Native Hawaiian or Other Pacific Islander",
+        RaceEthnicity == 7 ~ "7. White",
+        RaceEthnicity == 8 ~ "8. Two or more races",
+        RaceEthnicity == 9 ~ "9. Race and ethnicity unknown",
+        TRUE ~ "Unknown"
+      ),
+      Sex = recode(Sex, `1` = "1. Male", `2` = "2. Female"),
+      Full_part = if_else(IsFullTime == 1, "1. Full-time", "0. Part-time"),
+      Degree_status = if_else(IsDegreeCertSeeking == 1, "1. Degree Seeking", "0. Non-degree seeking")
+    )
+}
+
+#Styling tables
+styled_kable <- function(df, caption = NULL) {
+  kable(df, caption = caption) %>%
+    kable_styling(full_width = TRUE, position = "center", bootstrap_options = c("hover", "condensed")) %>%
+    row_spec(0, bold = TRUE)
+}
+```
+
+```{r}
+# Preparation of Student Data
+## Student enrollment counts to use for earlier parts of the data
+detail_enrollment_counts <- student_data %>% 
+  group_by(IsFullTime, StudentLevel, IsDegreeCertSeeking, Sex, RaceEthnicity, IsFirstTime, IsTransfer) %>% 
+  reframe(Headcount=n()) %>% 
+  complete(Sex = unique(student_data$Sex),
+         RaceEthnicity = unique(student_data$RaceEthnicity),
+         fill = list(Headcount = NA)) 
+
+#Using function to recode variables for readability
+detail_enrollment_counts <-recode_ipeds_vars(detail_enrollment_counts) %>% 
+  select(-c(IsFullTime, IsDegreeCertSeeking, IsFirstTime, IsTransfer)) %>% 
+  select(StudentLevel, Full_part, Degree_status, Sex, RaceEthnicity, Entry_status, everything()) %>% 
+  arrange(desc(StudentLevel), desc(Full_part), desc(Degree_status), Sex, RaceEthnicity, Entry_status)
+
+```
+
+# IPEDS Fall Enrollment Validation {.tabset}
+
+## Comparison to Previous Year
+
+### Student Data
+
+```{r}
+
+current_dtl <- recode_ipeds_vars(student_data)
+prev_dtl <- recode_ipeds_vars(prev_student_data)
+
+
+ compare_vars <- c("Sex", "RaceEthnicity", "StudentLevel", "Full_part", "Entry_status", "Degree_status")
+
+ output_list <- list()
+
+ for (var in compare_vars) {
+   curr <- current_dtl %>% count(.data[[var]], name = "Current_Year")
+
+   prev <- prev_dtl %>% count(.data[[var]], name = "Previous_Year")
+   diff_tbl <- full_join(curr, prev, by = var) %>%
+     mutate(across(c(Current_Year, Previous_Year), ~replace_na(.x, 0)),
+            Change = Current_Year - Previous_Year,
+            Percent_Change = round((Change / Previous_Year) * 100, 1))%>%
+   adorn_totals(where = "row")
+
+    dt <- datatable(diff_tbl,
+                    caption = paste("Year-over-Year Comparison by", var),
+                    options = list(pageLength = 10, autoWidth = TRUE))
+
+   dt<- datatable(diff_tbl,
+           caption = paste("Year-over-Year Comparison by", var),
+           options = list(pageLength = 10, autoWidth = TRUE)) %>%
+   formatStyle(
+     'Percent_Change',
+     backgroundColor = styleInterval(
+   c(-10, 10),
+   c('rgba(255, 99, 71, 0.3)', NA, 'rgba(144, 238, 144, 0.3)')
+ )
+   )
+   
+  ggplot(diff_tbl, aes(x = .data[[var]], y = Change, fill = Change > 0)) +
+  geom_col() +
+  theme_minimal() +
+  labs(title = paste("Year-over-Year Change by", var),
+       x = var, y = "Change in Headcount")
+
+   output_list[[var]] <- dt
+ }
+
+ htmltools::tagList(output_list)
+ 
+```
+
+### Retention Data
+```{r}
+#rentention counts for current year
+retention_prep <- retention_data %>%
+  mutate(AdjustedCohort = OrigCohort-Exclusions+Inclusions) %>% 
+  mutate(RetentionRate= round((StillEnrolled/AdjustedCohort)*100, digits = 1)) %>% 
+  pivot_longer(OrigCohort:RetentionRate, 
+               names_to = "Category", values_to = "Value")  %>% 
+  select(-Unitid) 
+
+#rentention counts for previous year
+prev_retention_prep <- prev_retention_data %>%
+  mutate(AdjustedCohort = OrigCohort-Exclusions+Inclusions) %>% 
+  mutate(RetentionRate= round((StillEnrolled/AdjustedCohort)*100, digits = 1)) %>% 
+  pivot_longer(OrigCohort:RetentionRate, 
+               names_to = "Category", values_to = "Value")  %>% 
+  select(-Unitid)
+
+retention_comparison <- full_join(retention_prep %>% rename(Current_Year= Value), 
+                                  prev_retention_prep %>% rename(Previous_Year= Value), 
+                                  by = join_by(IsFullTime, Category)) %>% 
+  mutate(Change = round(Current_Year - Previous_Year, digits = 1),
+         Percent_Change = round((Change / Previous_Year) * 100, 1))
+
+```
+
+#### Full-Time
+
+```{r}
+retention_comparison_ft <- retention_comparison %>%
+  filter(IsFullTime==1)
+
+datatable(retention_comparison_ft,
+           options = list(autoWidth = TRUE)) %>%
+   formatStyle(
+     'Percent_Change',
+     backgroundColor = styleInterval(
+   c(-10, 10),
+   c('rgba(255, 99, 71, 0.3)', NA, 'rgba(144, 238, 144, 0.3)')
+ )
+   )
+
+```
+
+#### Part-Time
+
+```{r}
+retention_comparison_pt <- retention_comparison %>%
+  filter(IsFullTime==0)
+
+datatable(retention_comparison_pt,
+           options = list(autoWidth = TRUE)) %>%
+   formatStyle(
+     'Percent_Change',
+     backgroundColor = styleInterval(
+   c(-10, 10),
+   c('rgba(255, 99, 71, 0.3)', NA, 'rgba(144, 238, 144, 0.3)')
+ )
+   )
+
+
+```
+
+
+
+## IPEDS Fall Enrollment Values
+
+### Part A - Fall Enrollment for Full-Time Undergraduate Students
+
+#### Male
+
+```{r}
+ug_ft_ds_male <- detail_enrollment_counts %>% 
+  filter(Sex=="1. Male" & 
+           StudentLevel=="Undergraduate" &
+           Degree_status=="1. Degree Seeking" & 
+           Full_part=="1. Full-time") %>% 
+  arrange(RaceEthnicity, Entry_status) %>%
+  select(RaceEthnicity, Entry_status, Headcount) %>% 
+  pivot_wider(names_from = Entry_status, values_from = Headcount) 
+
+ug_ft_nds_male <- detail_enrollment_counts %>% 
+  filter(Sex=="1. Male" & 
+           StudentLevel=="Undergraduate" &
+           Degree_status=="0. Non-degree seeking" & 
+           Full_part=="1. Full-time") %>% 
+  group_by(RaceEthnicity) %>%
+  reframe(`Non-degree/non-certificate-seeking`=sum(Headcount))
+  
+
+ug_ft_male_output <- full_join(ug_ft_ds_male, ug_ft_nds_male, by = join_by(RaceEthnicity)) %>% 
+  adorn_totals(where = c("row", "col"))
+
+
+
+styled_kable(ug_ft_male_output)
+
+```
+
+#### Female
+
+```{r}
+ug_ft_ds_female <- detail_enrollment_counts %>% 
+  filter(Sex=="2. Female" & 
+           StudentLevel=="Undergraduate" &
+           Degree_status=="1. Degree Seeking" & 
+           Full_part=="1. Full-time") %>% 
+  arrange(RaceEthnicity, Entry_status) %>%
+  select(RaceEthnicity, Entry_status, Headcount) %>% 
+  pivot_wider(names_from = Entry_status, values_from = Headcount) 
+
+ug_ft_nds_female <- detail_enrollment_counts %>% 
+  filter(Sex=="2. Female" & 
+           StudentLevel=="Undergraduate" &
+           Degree_status!="1. Degree Seeking" & 
+           Full_part=="1. Full-time") %>% 
+  group_by(RaceEthnicity) %>%
+  reframe(`Non-degree/non-certificate-seeking`=sum(Headcount))
+  
+
+
+ug_ft_female_output <- full_join(ug_ft_ds_female, ug_ft_nds_female, by = join_by(RaceEthnicity)) %>% 
+  adorn_totals(where = c("row", "col"))
+
+
+styled_kable(ug_ft_female_output)
+ 
+```
+
+### Part A - Fall Enrollment for Part-time Undergraduate Students
+
+#### Male
+
+```{r}
+ug_pt_ds_male <- detail_enrollment_counts %>% 
+  filter(Sex=="1. Male" & 
+           StudentLevel=="Undergraduate" &
+           Degree_status=="1. Degree Seeking" & 
+           Full_part=="0. Part-time") %>% 
+  arrange(RaceEthnicity, Entry_status) %>%
+  select(RaceEthnicity, Entry_status, Headcount) %>% 
+  pivot_wider(names_from = Entry_status, values_from = Headcount) 
+
+ug_pt_nds_male <- detail_enrollment_counts %>% 
+  filter(Sex=="1. Male" & 
+           StudentLevel=="Undergraduate" &
+           Degree_status!="1. Degree Seeking" & 
+           Full_part=="0. Part-time") %>% 
+  group_by(RaceEthnicity) %>%
+  reframe(`Non-degree/non-certificate-seeking`=sum(Headcount))
+  
+  
+
+ug_pt_male_output <- full_join(ug_pt_ds_male, ug_pt_nds_male, by = join_by(RaceEthnicity)) %>% 
+  adorn_totals(where = c("row", "col"))
+
+
+
+styled_kable(ug_pt_male_output)
+
+```
+
+#### Female
+
+```{r}
+ug_pt_ds_female <- detail_enrollment_counts %>% 
+  filter(Sex=="2. Female" & 
+           StudentLevel=="Undergraduate" &
+           Degree_status=="1. Degree Seeking" & 
+           Full_part=="0. Part-time") %>% 
+  arrange(RaceEthnicity, Entry_status) %>%
+  select(RaceEthnicity, Entry_status, Headcount) %>% 
+  pivot_wider(names_from = Entry_status, values_from = Headcount) 
+
+ug_pt_nds_female <- detail_enrollment_counts %>% 
+  filter(Sex=="2. Female" & 
+           StudentLevel=="Undergraduate" &
+           Degree_status!="1. Degree Seeking" & 
+           Full_part=="0. Part-time") %>% 
+  group_by(RaceEthnicity) %>%
+  reframe(`Non-degree/non-certificate-seeking`=sum(Headcount))
+
+
+ug_pt_female_output <- full_join(ug_pt_ds_female, ug_pt_nds_female, by = join_by(RaceEthnicity)) %>% 
+  adorn_totals(where = c("row", "col"))
+
+
+styled_kable(ug_pt_female_output)
+ 
+```
+
+### Part A - Fall Enrollment for Graduate Students
+
+#### Male
+
+```{r}
+gr_male <- detail_enrollment_counts %>% 
+  filter(Sex=="1. Male" & 
+           StudentLevel=="Graduate") %>% 
+  group_by(RaceEthnicity, Full_part) %>%
+  reframe(Total= sum(Headcount)) %>% 
+  arrange(RaceEthnicity, desc(Full_part)) %>% 
+  pivot_wider(names_from = Full_part, values_from = Total) %>% 
+  adorn_totals(where=c("row", "col"))
+
+  
+styled_kable(gr_male) 
+
+```
+
+#### Female
+
+```{r}
+gr_female <- detail_enrollment_counts %>% 
+  filter(Sex=="2. Female" & 
+           StudentLevel=="Graduate") %>% 
+  group_by(RaceEthnicity, Full_part) %>%
+  reframe(Total= sum(Headcount)) %>% 
+  arrange(RaceEthnicity, desc(Full_part)) %>% 
+  pivot_wider(names_from = Full_part, values_from = Total) %>% 
+  adorn_totals(where=c("row", "col"))
+
+  
+styled_kable(gr_female)
+
+```
+
+### Part A - Fall Enrollment - Summary
+
+#### Male
+
+```{r}
+summary_male <- detail_enrollment_counts %>% 
+  filter(Sex=="1. Male") %>% 
+  group_by(RaceEthnicity, Full_part) %>%
+  reframe(Total= sum(Headcount)) %>% 
+  arrange(RaceEthnicity, desc(Full_part)) %>% 
+  pivot_wider(names_from = Full_part, values_from = Total) %>% 
+  adorn_totals(where=c("row", "col"))
+
+  
+styled_kable(summary_male) 
+
+```
+
+#### Female
+
+```{r}
+summary_female <- detail_enrollment_counts %>% 
+  filter(Sex=="2. Female") %>% 
+  group_by(RaceEthnicity, Full_part) %>%
+  reframe(Total= sum(Headcount)) %>% 
+  arrange(RaceEthnicity, desc(Full_part)) %>% 
+  pivot_wider(names_from = Full_part, values_from = Total) %>% 
+  adorn_totals(where=c("row", "col"))
+
+  
+styled_kable(summary_female)
+```
+
+### Part A - Fall Enrollment - Sex Unknown
+
+```{r}
+sex_uk<- student_data %>% 
+  filter(!GenderDetail %in% c(1,2)) %>% 
+  group_by(StudentLevel) %>%
+  reframe(Headcount= n()) %>% 
+  arrange(desc(StudentLevel)) %>% 
+  pivot_wider(names_from = StudentLevel, values_from = Headcount)
+
+  
+styled_kable(sex_uk) 
+
+```
+
+### Part A - Fall Enrollment by Distance Education 
+
+#### Status 1
+
+```{r}
+distance_ed1<- student_data %>% 
+  arrange(desc(DistanceEd)) %>% 
+  mutate(DistanceEd = case_when(DistanceEd==0~ "Not enrolled in any distance education courses",
+                                DistanceEd==1~ "Enrolled in at least one but not all distance education courses",
+                                DistanceEd==2 ~ "Enrolled exclusively in distance education courses"),
+         StudentLevel  = case_when(StudentLevel=="Undergraduate" & IsDegreeCertSeeking==1 ~ "Undergraduate Degree Seeking",
+                                   StudentLevel=="Undergraduate" ~ "Undergraduate Non-Degree Seeking",
+                           T ~ StudentLevel)) %>% 
+  
+  group_by(StudentLevel, DistanceEd) %>%
+  reframe(Headcount= n()) %>%  
+  arrange(desc(StudentLevel)) %>% 
+  pivot_wider(names_from = StudentLevel, values_from = Headcount)
+
+  
+styled_kable(distance_ed1) 
+```
+
+
+#### Status 2
+
+```{r}
+distance_ed2<- student_data %>% 
+  filter(DistanceEd==2) %>%
+  mutate(Group = case_when(OnlineState==UnitidState ~ "1. Located in the same state/jurisdiction as the institution",
+                           OnlineState %in% state.abb ~ "2. Located in the U.S. but not in the same state/jurisdiction as the institution",
+                        OnlineState==90 ~ "3. Located outside the U.S.",
+                        T  ~  "4. Located in the U.S. but state/jurisdiction unknown")) %>%
+  mutate(StudentLevel  = case_when(StudentLevel=="Undergraduate" & IsDegreeCertSeeking==1 ~ "Undergraduate Degree Seeking",
+                                   StudentLevel=="Undergraduate" ~ "Undergraduate Non-Degree Seeking",
+                           T ~ StudentLevel)) %>% 
+  
+  group_by(StudentLevel) %>%
+  reframe(Headcount= n()) %>%  
+  arrange(desc(StudentLevel)) %>% 
+  pivot_wider(names_from = StudentLevel, values_from = Headcount)
+
+  
+styled_kable(distance_ed2)
+
+```
+
+### Part B - Fall Enrollment by Age and Sex for Full-time Undergraduate Students
+
+```{r}
+enrl_by_age <- student_data %>% 
+  mutate(Age_range = case_when(Age < 18 ~ "Under 18",
+                               Age < 20 ~ "18-19",
+                               Age < 22 ~ "20-21",
+                               Age <25 ~ "22-24",
+                               Age < 30 ~ "25-29",
+                               Age < 35 ~ "30-34",
+                               Age < 40 ~ "35-39",
+                               Age < 50  ~ "40-49",
+                               Age < 65 ~ "50-64",
+                               Age >=65 ~ "60 and over",
+                               T ~ "Unknown"),
+         Sex= case_when(Sex == 1 ~ "1. Male",
+                        Sex==2 ~ "2. Female"))  
+
+
+ug_ft_age <- enrl_by_age %>% 
+  filter(IsFullTime==1 &
+           StudentLevel== "Undergraduate") %>% 
+  arrange(Age) %>%
+  group_by(Age_range, Sex) %>% 
+  reframe(Headcount= length(unique(StudentId))) %>% 
+  complete(Age_range = unique(enrl_by_age$Age_range),
+         fill = list(Headcount = NA)) %>% 
+  pivot_wider(names_from = Sex, values_from = Headcount) %>% 
+  adorn_totals()
+  
+styled_kable(ug_ft_age)
+
+```
+
+
+### Part B - Fall Enrollment by Age and Sex for Part-time Undergraduate Students
+
+```{r}
+ug_pt_age <- enrl_by_age %>% 
+  filter(IsFullTime==0 &
+           StudentLevel== "Undergraduate") %>% 
+  arrange(Age) %>%
+  group_by(Age_range, Sex) %>% 
+  reframe(Headcount= length(unique(StudentId))) %>% 
+  complete(Age_range = unique(enrl_by_age$Age_range),
+         fill = list(Headcount = NA)) %>% 
+  pivot_wider(names_from = Sex, values_from = Headcount) %>% 
+  adorn_totals()
+  
+styled_kable(ug_pt_age)
+
+```
+
+
+### Part B - Fall Enrollment by Age and Sex for Full-time Graduate Students
+
+```{r}
+gr_ft_age <- enrl_by_age %>% 
+  filter(IsFullTime==1 &
+           StudentLevel== "Graduate") %>% 
+  arrange(Age) %>%
+  group_by(Age_range, Sex) %>% 
+  reframe(Headcount= length(unique(StudentId))) %>% 
+  complete(Age_range = unique(enrl_by_age$Age_range),
+         fill = list(Headcount = NA)) %>% 
+  pivot_wider(names_from = Sex, values_from = Headcount) %>% 
+  adorn_totals()
+  
+styled_kable(gr_ft_age) 
+```
+
+### Part B - Fall Enrollment by Age and Sex for Part-time Graduate Students
+
+```{r}
+gr_pt_age <- enrl_by_age %>% 
+  filter(IsFullTime==0 &
+           StudentLevel== "Graduate") %>% 
+  arrange(Age) %>%
+  group_by(Age_range, Sex) %>% 
+  reframe(Headcount= length(unique(StudentId))) %>% 
+  complete(Age_range = unique(enrl_by_age$Age_range),
+         fill = list(Headcount = NA)) %>% 
+  pivot_wider(names_from = Sex, values_from = Headcount) %>% 
+  adorn_totals()
+  
+styled_kable(gr_pt_age) 
+
+```
+
+### Part C - Residence of First-time Undergraduates
+
+```{r}
+first_time_res_all <- student_data %>% 
+  filter(IsFirstTime==0 &
+           StudentLevel== "Undergraduate") %>% 
+  mutate(AdmitState= case_when(is.na(AdmitState) ~ 98,
+                               T ~ as.numeric(AdmitState))) %>%
+  group_by(AdmitState) %>%
+  reframe(`Total first-time`= length(unique(StudentId)))
+
+first_time_res_recent_grad <- student_data %>% 
+  filter(IsFirstTime==0 &
+           IsRecentGrad==1 & 
+           StudentLevel== "Undergraduate") %>%
+  mutate(AdmitState= case_when(is.na(AdmitState) ~ 98,
+                               T ~ as.numeric(AdmitState))) %>% 
+  group_by(AdmitState) %>%
+  reframe(`Recent HS graduate`= length(unique(StudentId)))
+
+first_time_res_output <-full_join(first_time_res_all, first_time_res_recent_grad,
+                                  by = join_by(AdmitState)) %>% 
+  arrange(AdmitState) %>% 
+  adorn_totals()
+  
+styled_kable(first_time_res_output) 
+
+```
+
+### Part D - Total Undergraduate Entering Class
+
+Note: the remaining values of this section need to be entered manually
+
+```{r}
+  total_first_time_ft_ds_ug <- student_data %>%
+    filter(IsDegreeCertSeeking==1 &
+             IsFullTime==1 &
+             IsFirstTime==1 &
+             StudentLevel== "Undergraduate") %>%
+    mutate(Category = "D1: Total full-time, first-time degree/certificate-seeking undergraduates from Part A") %>%
+  group_by(Category) %>% 
+    reframe(Value= length(unique(StudentId)))
+
+  total_first_time_ds_ug <- student_data %>%
+    filter(IsDegreeCertSeeking==1 &
+             IsFirstTime==1 &
+             StudentLevel== "Undergraduate") %>%
+    mutate(Category = "D2: Total first-time degree/certificate-seeking undergraduates (full-time+ part-time) from Part A") %>%
+  group_by(Category) %>% 
+    reframe(Value= length(unique(StudentId)))
+
+   total_trfr_ds_ug <- student_data %>%   
+     filter(IsDegreeCertSeeking==1 &   
+              IsTransfer==1 &   
+              StudentLevel== "Undergraduate") %>%   
+     mutate(Category = "D3: Total transfer-in (non-first-time entering), degree/certificate-seeking undergraduates (full-time+ part-time) from Part A") %>%   
+  group_by(Category) %>% 
+     reframe(Value= length(unique(StudentId)))   
+
+   total_nds_ug <- student_data %>%   
+     filter(IsDegreeCertSeeking==0 &   
+              StudentLevel== "Undergraduate") %>%   
+     mutate(Category = "D4: Total non-degree/non-certificate-seeking undergraduates (full-time+ part-time) from Part A") %>% 
+  group_by(Category) %>%   
+     reframe(Value= length(unique(StudentId)))   
+
+
+
+   partD <- bind_rows(total_first_time_ft_ds_ug, 
+                      total_first_time_ds_ug, 
+                      total_trfr_ds_ug,
+                      total_nds_ug)
+
+   styled_kable(partD) 
+```
+
+
+### Part E First-time Bachelor's Cohort Retention Rates
+
+```{r}
+retention_cohort_ft <- retention_prep %>%
+  filter(IsFullTime ==1) %>% 
+  select(-IsFullTime)
+
+retention_cohort_pt <- retention_prep %>%
+  filter(IsFullTime ==0) %>% 
+  select(-IsFullTime)
+
+```
+
+
+#### Full-time
+
+```{r}
+styled_kable(retention_cohort_ft) 
+
+```
+
+#### Part-time
+
+```{r}
+styled_kable(retention_cohort_pt) 
+
+```
