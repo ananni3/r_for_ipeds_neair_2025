@@ -14,4 +14,8 @@ Cleaned_Sample_dataset_previous_year.xlsx
 "Cleaned_" datasets are created by the ipeds_uploadable_creation.R.
 
 If you're just getting started with R, start by installing R and RStudio. 
-Follow the instructions here: https://posit.co/download/rstudio-desktop/
+Follow the instructions here: 
+https://posit.co/download/rstudio-desktop/
+
+Here's a link to the presentation slides: 
+https://docs.google.com/presentation/d/1zwvJISYYwQvgr63Abit82yLoQt6v9h58/
