@@ -1,18 +1,42 @@
 # ============================================
+# Demo Code for NEAIR 2025
+# Efficient IPEDS Reporting Using R
+# Created by Emily Orr
+# 
+# Note: When using this demo code, put the 
+# sample data in a folder called "Data" in 
+# the working directory. 
+# ============================================
+
+
+# ============================================
+# 0. Setup
+# ============================================
+
+cat(rep("\n", 50))
+rm(list=ls())
+gc(reset = TRUE)
+options(scipen=99)
+
+
+# ============================================
 # 1. Load Libraries and Data
 # ============================================
+
 library(dplyr)
 library(stringr)
 library(readxl)
 library(openxlsx)
 library(IPEDSuploadables)
-
+# Try tidylog! It provides feedback on many tidyverse actions
+library(tidylog)
 
 # Read the in the student data - This uses a sample dataset that can be replaced with your data
 student_data <- read_excel("Data/Sample_dataset.xlsx", sheet = "student_data")
 
 # Read in the retention data - This uses a sample dataset that can be replaced with your data
 retention_data <- read_excel("Data/Sample_dataset.xlsx", sheet = "retention_data")
+
 
 # ============================================
 # 2. Clean and Recode Variables
@@ -105,8 +129,6 @@ produce_ef1_report(cleaned_student_data, retention_data)
 # 4. Save Cleaned files for your reference
 # ============================================
 
-# Make sure you have a folder titled "Data"
-library(openxlsx)
 wb<- createWorkbook()
 addWorksheet(wb, "student_data")
 addWorksheet(wb, "retention_data")
